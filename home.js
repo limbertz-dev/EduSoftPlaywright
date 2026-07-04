@@ -32,10 +32,26 @@ async function goToHomeUnit(page) {
     return false;
 }
 
+async function clickNickAndEmily(page) {
+    await page.waitForTimeout(2000);
+    
+    try {
+        const nickAndEmilySelector = 'span.home__courseListItemName.ng-binding:has-text("Nick and Emily")';
+        await page.waitForSelector(nickAndEmilySelector, { timeout: 5000 });
+        await page.click(nickAndEmilySelector);
+        console.log('✓ Clicked on Nick and Emily');
+        await page.waitForTimeout(3000);
+        return true;
+    } catch (e) {
+        console.log('✗ Could not find Nick and Emily element');
+        return false;
+    }
+}
+
 async function navigateToHome(page) {
     await page.goto('https://ed.engdis.com/ucbtarija#/home', { waitUntil: 'domcontentloaded' });
     console.log('✓ Navigated to home page');
     return await goToHomeUnit(page);
 }
 
-module.exports = { goToHomeUnit, navigateToHome };
+module.exports = { goToHomeUnit, navigateToHome, clickNickAndEmily };

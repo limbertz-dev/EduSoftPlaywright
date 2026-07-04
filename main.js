@@ -3,7 +3,7 @@ const { login } = require('./login.js');
 const { navigateToHome } = require('./home.js');
 
 async function run() {
-    const browser = await chromium.launch({ headless: headless: false });
+    const browser = await chromium.launch({ headless: false });
     const page = await browser.newPage();
 
     try {
