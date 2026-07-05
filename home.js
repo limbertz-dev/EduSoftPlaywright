@@ -19,7 +19,6 @@ async function goToHomeUnit(page) {
             const element = await page.$(selector);
             if (element) {
                 await element.click({ timeout: 5000 });
-                console.log('✓ Clicked on unit element');
                 await page.waitForTimeout(3000);
                 return true;
             }
@@ -28,13 +27,12 @@ async function goToHomeUnit(page) {
         }
     }
 
-    console.log('✗ Could not find unit element');
+    console.log('✗ No se encontró el elemento de unidad');
     return false;
 }
 
 async function navigateToHome(page) {
     await page.goto('https://ed.engdis.com/ucbtarija#/home', { waitUntil: 'domcontentloaded' });
-    console.log('✓ Navigated to home page');
     return await goToHomeUnit(page);
 }
 

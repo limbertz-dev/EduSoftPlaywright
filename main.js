@@ -3,7 +3,7 @@ const { login } = require('./login.js');
 const { navigateToHome } = require('./home.js');
 
 async function run() {
-    const browser = await chromium.launch({ headless: headless: false });
+    const browser = await chromium.launch({ headless: false });
     const page = await browser.newPage();
 
     try {
@@ -15,13 +15,11 @@ async function run() {
             return;
         }
 
-        console.log('=== Navegando a Home ===');
-        const homeSuccess = await navigateToHome(page);
+        // Navega a home y hace clic en la unidad (sin mostrar logs)
+        await navigateToHome(page);
         
-        if (homeSuccess) {
-            console.log('✓ Successfully clicked unit element');
-            await page.waitForTimeout(5000);
-        }
+        // Espera un poco para ver el resultado en el navegador
+        await page.waitForTimeout(5000);
 
     } catch (error) {
         console.error('Error:', error.message);
