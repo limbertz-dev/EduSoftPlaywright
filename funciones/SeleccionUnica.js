@@ -68,12 +68,6 @@ async function solveSeleccionUnica(page) {
         console.log('✓ Click en CheckAnswer');
         await page.waitForTimeout(1500);
 
-        // 6. Click Next
-        await page.waitForSelector('.tasksBtnext', { timeout: 10000 });
-        await page.click('.tasksBtnext');
-        console.log('✓ Click en Next');
-        await page.waitForTimeout(2000);
-
         return true;
     } catch (e) {
         console.log('✗ Error en Selección Única:', e.message);
