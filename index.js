@@ -6,6 +6,7 @@ const { solveClassification } = require('./funciones/Classification.js');
 const { solveMatching } = require('./funciones/Matching.js');
 const { solveFITB } = require('./funciones/FITB.js');
 const { solveCloze } = require('./funciones/Cloze.js');
+const { solveSequence } = require('./funciones/Sequence.js');
 const { solveTinyMCE } = require('./funciones/TinyMCE.js');
 
 const MAX_RETRIES = 3;
@@ -74,7 +75,8 @@ async function solveWithRetry(page, solveFn, exerciseName) {
                     else if (document.querySelector('.prCl__main.classification')) type = 'classification';
                     else if (document.querySelector('.prMT_T2T__main')) type = 'matching';
                     else if (document.querySelector('.prFITB__main')) type = 'fitb';
-                    else if (document.querySelector('.prCLZ__main')) type = 'cloze';
+                    else if (document.querySelector('.prCLZ__main') || document.querySelector('.wordsBankTable') || document.querySelector('.TTpanswerDiv')) type = 'cloze';
+                    else if (document.querySelector('.prSeq__main')) type = 'sequence';
                     else if (document.querySelector('#SeeAnswer') && document.querySelector('iframe[id^="mce_"], #tinymce, .tox-tinymce')) type = 'tinymce';
 
                     const hasCheckAnswer = !!document.querySelector('#CheckAnswer');
@@ -89,14 +91,14 @@ async function solveWithRetry(page, solveFn, exerciseName) {
 
                 const nameMap = {
                     mcq: 'MCQ', openEnded: 'OpenEnded', classification: 'Classification',
-                    matching: 'Matching', fitb: 'FITB', cloze: 'Cloze', tinymce: 'TinyMCE'
+                    matching: 'Matching', fitb: 'FITB', cloze: 'Cloze', sequence: 'Sequence', tinymce: 'TinyMCE'
                 };
                 const exerciseName = nameMap[exerciseInfo.type] || exerciseInfo.type;
                 console.log(`📌 Detectado: ${exerciseName}`);
 
                 const solveMap = {
                     mcq: solveMCQ, openEnded: solveOpenEnded, classification: solveClassification,
-                    matching: solveMatching, fitb: solveFITB, cloze: solveCloze, tinymce: solveTinyMCE
+                    matching: solveMatching, fitb: solveFITB, cloze: solveCloze, sequence: solveSequence, tinymce: solveTinyMCE
                 };
 
                 const ok = await solveWithRetry(page, solveMap[exerciseInfo.type], exerciseName);

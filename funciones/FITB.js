@@ -32,19 +32,33 @@ async function solveFITB(page) {
         answers.forEach(a => console.log(`  ${a.index}: aid_${a.aid}`));
 
         await page.click('#SeeAnswer');
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
 
         for (const ans of answers) {
             try {
                 const listNum = ans.index + 1;
                 const wrapperSel = `#prFITB__DDLOptionsW_Q1_L${listNum}`;
+                const optId = `DDLOptions__listItem_aid_${ans.aid}`;
 
-                const selected = page.locator(`${wrapperSel} .DDLOptions__selected`);
-                await selected.waitFor({ state: 'visible', timeout: 5000 });
-                await selected.click();
-                await page.waitForTimeout(600);
+                const opened = await page.evaluate((sel) => {
+                    const wrapper = document.querySelector(sel);
+                    if (!wrapper) return false;
+                    const selected = wrapper.querySelector('.DDLOptions__selected');
+                    if (selected) {
+                        selected.click();
+                        return true;
+                    }
+                    return false;
+                }, wrapperSel);
 
-                const option = page.locator(`#DDLOptions__listItem_aid_${ans.aid}`);
+                if (!opened) {
+                    console.log(`⚠ No se pudo abrir dropdown para aid_${ans.aid}`);
+                    continue;
+                }
+
+                await page.waitForTimeout(800);
+
+                const option = page.locator(`#${optId}`);
                 const optCount = await option.count();
                 if (optCount === 0) {
                     console.log(`⚠ No se encontró opción aid_${ans.aid}`);

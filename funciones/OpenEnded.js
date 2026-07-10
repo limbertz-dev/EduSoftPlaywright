@@ -30,50 +30,40 @@ async function solveOpenEnded(page) {
         answers.forEach((a, i) => console.log(`  ${i + 1}: "${a.substring(0, 50)}..."`));
 
         await page.click('#SeeAnswer');
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
 
-        const textareas = await page.$$('.prOpenEnded__qaItemText--textarea, textarea');
-        for (let i = 0; i < Math.min(textareas.length, answers.length); i++) {
-            const ta = textareas[i];
+        const textareas = page.locator('.prOpenEnded__qaItemText--textarea, textarea');
+        const taCount = await textareas.count();
+        let written = 0;
+
+        for (let i = 0; i < Math.min(taCount, answers.length); i++) {
+            const ta = textareas.nth(i);
             try {
+                await ta.evaluate(el => el.removeAttribute('disabled'));
                 await ta.click();
-                await ta.fill('');
-                await ta.fill(answers[i]);
-                console.log(`  ✓ Escrito ${i + 1}`);
                 await page.waitForTimeout(300);
+                await page.keyboard.press('Control+a');
+                await page.waitForTimeout(100);
+                await page.keyboard.press('Delete');
+                await page.waitForTimeout(200);
+                await page.keyboard.type(answers[i], { delay: 10 });
+                written++;
+                console.log(`  ✓ Escrito ${i + 1}`);
+                await page.waitForTimeout(500);
             } catch (e) {
-                console.log(`  ⚠ Error escribiendo ${i + 1}: ${e.message}`);
-                try {
-                    await page.evaluate(({ index, text }) => {
-                        const tas = document.querySelectorAll('.prOpenEnded__qaItemText--textarea, textarea');
-                        if (tas[index]) {
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                                window.HTMLTextAreaElement.prototype, 'value'
-                            ).set;
-                            nativeInputValueSetter.call(tas[index], text);
-                            tas[index].dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                    }, { index: i, text: answers[i] });
-                    console.log(`  ✓ Escrito ${i + 1} (vía native setter)`);
-                } catch (e2) {
-                    console.log(`  ✗ Error en ${i + 1}: ${e2.message}`);
-                }
+                console.log(`  ⚠ Error ${i + 1}: ${e.message}`);
             }
         }
 
-        await page.waitForTimeout(500);
-
-        const checkBtn = page.locator('#CheckAnswer');
-        await checkBtn.waitFor({ state: 'visible', timeout: 10000 });
-        const isDisabled = await checkBtn.isDisabled();
-        if (isDisabled) {
-            console.log('⚠ CheckAnswer deshabilitado, forzando...');
-            await checkBtn.click({ force: true });
-        } else {
-            await checkBtn.click();
+        if (written === 0) {
+            console.log('⚠ No se pudo escribir ninguna respuesta');
+            return false;
         }
-        console.log('✓ Click en CheckAnswer');
 
+        console.log(`✓ Escritas ${written} respuesta(s)`);
+        await page.waitForTimeout(1500);
+
+        await waitForCheckAnswer(page);
         return await verifyCorrect(page);
     } catch (e) {
         console.log('✗ Error en Open Ended:', e.message);

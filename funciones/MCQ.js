@@ -11,6 +11,9 @@ async function solveMCQ(page) {
         let correctIds = [];
 
         const patterns = [
+            '.multiRadio.correct input[type="radio"]',
+            '.multiRadioWrapper.correct input[type="radio"]',
+            '.prMCQ__answers .correct input[type="radio"]',
             '.lessonMultipleAnswer.c',
             '.prMCQ__item.correct',
             '.multiRadio.correct',
@@ -23,26 +26,40 @@ async function solveMCQ(page) {
 
         for (const sel of patterns) {
             const els = await page.$$(sel);
-            if (els.length > 0) {
-                for (const el of els) {
+            const ids = [];
+            for (const el of els) {
+                const tag = await el.evaluate(e => e.tagName.toLowerCase());
+                if (tag === 'input') {
                     const id = await el.getAttribute('id');
-                    if (id) correctIds.push(id);
+                    if (id) ids.push(id);
+                } else {
+                    const childId = await el.evaluate(e => {
+                        const inp = e.querySelector('input');
+                        return inp?.getAttribute('id') || '';
+                    });
+                    if (childId) ids.push(childId);
                 }
-                if (correctIds.length > 0) {
-                    console.log(`✓ Detectados ${correctIds.length} correctos por selector: ${sel}`);
-                    break;
-                }
+            }
+            if (ids.length > 0) {
+                correctIds = ids;
+                console.log(`✓ Detectados ${correctIds.length} correctos por selector: ${sel}`);
+                break;
             }
         }
 
         if (correctIds.length === 0) {
             const idsWithText = await page.evaluate(() => {
-                const corrects = document.querySelectorAll('.lessonMultipleAnswer.c, .c');
-                return Array.from(corrects).map(el => el.getAttribute('id')).filter(Boolean);
+                const corrects = document.querySelectorAll('.multiRadioWrapper.correct, .multiRadio.correct, .lessonMultipleAnswer.c, .c');
+                const result = [];
+                corrects.forEach(el => {
+                    const inp = el.querySelector('input[id]');
+                    if (inp) result.push(inp.getAttribute('id'));
+                });
+                return result;
             });
             if (idsWithText.length > 0) {
                 correctIds = idsWithText;
-                console.log(`✓ Detectados ${correctIds.length} correctos por clase "c"`);
+                console.log(`✓ Detectados ${correctIds.length} correctos por clase "correct"`);
             }
         }
 
@@ -76,18 +93,19 @@ async function solveMCQ(page) {
             try {
                 console.log(`📌 Seleccionando id="${id}"`);
 
-                const input = page.locator(`#${id} input[type="checkbox"], #${id} input[type="radio"]`);
+                const input = page.locator(`#${id}`);
                 const inputCount = await input.count();
 
                 if (inputCount > 0) {
                     await input.first().click({ force: true });
                 } else {
-                    const overlay = page.locator(`#${id} .overlayCheckbox`);
-                    const overlayCount = await overlay.count();
-                    if (overlayCount > 0) {
-                        await overlay.first().click({ force: true });
+                    const fallback = page.locator(`[id="${id}"] input[type="radio"], [id="${id}"] input[type="checkbox"]`);
+                    const fbCount = await fallback.count();
+                    if (fbCount > 0) {
+                        await fallback.first().click({ force: true });
                     } else {
-                        await page.locator(`#${id}`).click({ force: true });
+                        console.log(`⚠ Elemento #${id} no encontrado`);
+                        continue;
                     }
                 }
                 await page.waitForTimeout(500);
