@@ -1,4 +1,4 @@
-const { verifyCorrect, waitForCheckAnswer } = require('./utils.js');
+const { verifyCorrect, waitForCheckAnswer, dragItemToTarget } = require('./utils.js');
 
 async function solveClassification(page) {
     try {
@@ -40,43 +40,133 @@ async function solveClassification(page) {
         });
 
         await page.click('#SeeAnswer');
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1200);
 
-        const bankZone = page.locator('.bankContainer .dndZone');
+        async function dragItemWithRetry(itemId, containerIdx, maxRetries) {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                const srcLoc = page.locator(
+                    `.bankContainer .dnditem.draggable[ans_id="${itemId}"]`
+                ).first();
+                const count = await srcLoc.count();
+                if (count === 0) {
+                    console.log(`  ⚠ Item ${itemId} no está en banco (intento ${attempt})`);
+                    return false;
+                }
+
+                const tgtZone = page.locator('.prCl__container--normal .dndZone').nth(containerIdx);
+                const ok = await dragItemToTarget(page, srcLoc, tgtZone);
+                if (!ok) {
+                    console.log(`  ⚠ Drag falló para item ${itemId} (intento ${attempt})`);
+                    await page.waitForTimeout(500);
+                    continue;
+                }
+
+                const arrived = await page.evaluate(({ itemId, containerIdx }) => {
+                    const container = document.querySelectorAll('.prCl__container--normal')[containerIdx];
+                    if (!container) return false;
+                    const zone = container.querySelector('.dndZone');
+                    return zone?.querySelector(`.dnditem[ans_id="${itemId}"]`) !== null;
+                }, { itemId, containerIdx });
+
+                if (arrived) return true;
+
+                console.log(`  ⚠ Item ${itemId} no llegó al destino (intento ${attempt})`);
+                await page.waitForTimeout(500);
+            }
+            return false;
+        }
+
         let moved = 0;
-
         for (const g of mapping) {
             for (const item of g.items) {
                 if (!item.id) continue;
-                const sourceEl = bankZone.locator('ed-la-dnditem').filter({
-                    has: page.locator(`.dnditem[ans_id="${item.id}"]`)
-                });
-                const targetZone = page.locator('.prCl__container--normal .dndZone').nth(g.containerIdx);
-
-                const srcBox = await sourceEl.boundingBox();
-                const tgtBox = await targetZone.boundingBox();
-
-                if (!srcBox || !tgtBox) continue;
-
-                const sx = srcBox.x + srcBox.width / 2;
-                const sy = srcBox.y + srcBox.height / 2;
-                const tx = tgtBox.x + tgtBox.width / 2;
-                const ty = tgtBox.y + tgtBox.height / 2;
-
-                await page.mouse.move(sx, sy);
-                await page.waitForTimeout(200);
-                await page.mouse.down();
-                await page.waitForTimeout(300);
-                await page.mouse.move(tx, ty, { steps: 25 });
-                await page.waitForTimeout(200);
-                await page.mouse.up();
-                await page.waitForTimeout(800);
-                moved++;
+                const ok = await dragItemWithRetry(item.id, g.containerIdx, 2);
+                if (ok) {
+                    moved++;
+                    console.log(`  ✓ Item ${item.id} (${item.text}) → contenedor ${g.containerIdx}`);
+                }
             }
         }
 
         console.log(`✓ Movidos ${moved} item(s) a sus contenedores`);
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(800);
+
+        const corrections = await page.evaluate((mapping) => {
+            const containers = document.querySelectorAll('.prCl__container--normal');
+            const state = [];
+            mapping.forEach(g => {
+                const container = containers[g.containerIdx];
+                if (!container) return;
+                const zone = container.querySelector('.dndZone');
+                if (!zone) return;
+                const currentIds = new Set();
+                zone.querySelectorAll('.dnditem[ans_id]').forEach(el => {
+                    const id = el.getAttribute('ans_id');
+                    if (id) currentIds.add(id);
+                });
+                const expectedIds = new Set(g.items.map(i => i.id).filter(Boolean));
+                const missing = [...expectedIds].filter(id => !currentIds.has(id));
+                if (missing.length > 0) {
+                    state.push({ containerIdx: g.containerIdx, itemIds: missing });
+                }
+            });
+            return state;
+        }, mapping);
+
+        if (corrections.length > 0) {
+            console.log(`⚠ ${corrections.reduce((s, c) => s + c.itemIds.length, 0)} item(s) faltantes, corrigiendo...`);
+
+            for (const fix of corrections) {
+                for (const itemId of fix.itemIds) {
+                    if (!itemId) continue;
+
+                    const stillInBank = await page.locator(
+                        `.bankContainer .dnditem.draggable[ans_id="${itemId}"]`
+                    ).count();
+
+                    if (stillInBank > 0) {
+                        const ok = await dragItemWithRetry(itemId, fix.containerIdx, 2);
+                        if (ok) {
+                            moved++;
+                            console.log(`  ✓ Corregido: item ${itemId} → contenedor ${fix.containerIdx}`);
+                        }
+                        continue;
+                    }
+
+                    const srcContainerIdx = await page.evaluate((itemId) => {
+                        const containers = document.querySelectorAll('.prCl__container--normal');
+                        for (let i = 0; i < containers.length; i++) {
+                            const zone = containers[i]?.querySelector('.dndZone');
+                            if (zone?.querySelector(`.dnditem[ans_id="${itemId}"]`)) return i;
+                        }
+                        return -1;
+                    }, itemId);
+
+                    if (srcContainerIdx === -1) continue;
+
+                    const srcItem = page.locator(
+                        `.prCl__container--normal .dndZone .dnditem.draggable[ans_id="${itemId}"]`
+                    ).first();
+                    const tgtZone = page.locator('.prCl__container--normal .dndZone').nth(fix.containerIdx);
+
+                    const ok = await dragItemToTarget(page, srcItem, tgtZone);
+                    if (ok) {
+                        const arrived = await page.evaluate(({ itemId, containerIdx }) => {
+                            const container = document.querySelectorAll('.prCl__container--normal')[containerIdx];
+                            const zone = container?.querySelector('.dndZone');
+                            return zone?.querySelector(`.dnditem[ans_id="${itemId}"]`) !== null;
+                        }, { itemId, containerIdx: fix.containerIdx });
+
+                        if (arrived) {
+                            moved++;
+                            console.log(`  ✓ Swap: item ${itemId} → contenedor ${fix.containerIdx}`);
+                        }
+                    }
+                }
+            }
+        }
+
+        await page.waitForTimeout(1500);
 
         await waitForCheckAnswer(page);
         return await verifyCorrect(page);

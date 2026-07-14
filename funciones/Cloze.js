@@ -1,26 +1,4 @@
-const { verifyCorrect, waitForCheckAnswer } = require('./utils.js');
-
-async function dragItemToTarget(page, srcLoc, tgtLoc) {
-    const srcBox = await srcLoc.boundingBox();
-    const tgtBox = await tgtLoc.boundingBox();
-    if (!srcBox || !tgtBox) return false;
-
-    const sx = srcBox.x + srcBox.width / 2;
-    const sy = srcBox.y + srcBox.height / 2;
-    const tx = tgtBox.x + tgtBox.width / 2;
-    const ty = tgtBox.y + tgtBox.height / 2;
-
-    await page.mouse.move(sx, sy);
-    await page.waitForTimeout(100);
-    await page.mouse.down();
-    await page.waitForTimeout(200);
-    const steps = Math.max(10, Math.round(Math.abs(tx - sx + ty - sy) / 10));
-    await page.mouse.move(tx, ty, { steps });
-    await page.waitForTimeout(100);
-    await page.mouse.up();
-    await page.waitForTimeout(1000);
-    return true;
-}
+const { verifyCorrect, waitForCheckAnswer, dragItemToTarget } = require('./utils.js');
 
 async function solveWordsBankCloze(page) {
     console.log('📌 Resolviendo Words Bank Cloze (con imagen/texto)');
@@ -78,14 +56,43 @@ async function solveWordsBankCloze(page) {
     });
 
     await page.click('#SeeAnswer');
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1200);
+
+    async function dragWordWithRetry(itemId, targetIdx, maxRetries) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const srcLoc = page.locator(`.draggable.wordBankTile[data-id="${itemId}"]`).first();
+            const count = await srcLoc.count();
+            if (count === 0) {
+                console.log(`  ⚠ Item ${itemId} no está en banco (intento ${attempt})`);
+                return false;
+            }
+
+            const tgtLoc = page.locator('.TTpanswerDiv.droptarget').nth(targetIdx);
+            const ok = await dragItemToTarget(page, srcLoc, tgtLoc);
+            if (!ok) {
+                console.log(`  ⚠ Drag falló para item ${itemId} (intento ${attempt})`);
+                await page.waitForTimeout(500);
+                continue;
+            }
+
+            const arrived = await page.evaluate(({ itemId, targetIdx }) => {
+                const target = document.querySelectorAll('.TTpanswerDiv.droptarget')[targetIdx];
+                if (!target) return false;
+                const item = target.querySelector(`.wordBankTile[data-id="${itemId}"]`);
+                return item !== null;
+            }, { itemId, targetIdx });
+
+            if (arrived) return true;
+
+            console.log(`  ⚠ Item ${itemId} no llegó al destino (intento ${attempt})`);
+            await page.waitForTimeout(500);
+        }
+        return false;
+    }
 
     let moved = 0;
     for (const m of mapping) {
-        const srcLoc = page.locator(`.draggable.wordBankTile[data-id="${m.itemId}"]`).first();
-        const tgtLoc = page.locator('.TTpanswerDiv.droptarget').nth(m.zoneIdx);
-
-        const ok = await dragItemToTarget(page, srcLoc, tgtLoc);
+        const ok = await dragWordWithRetry(m.itemId, m.zoneIdx, 2);
         if (ok) {
             moved++;
             console.log(`  ✓ Item ${m.itemId} → espacio ${m.zoneIdx}`);
@@ -126,21 +133,17 @@ async function solveStandardCloze(page) {
 
     if (mapping.length === 0) {
         const fallback = await page.evaluate(() => {
-            const banks = document.querySelectorAll('#bankContainer ed-la-dnditem .dnditem');
+            const bankItems = document.querySelectorAll('#bankContainer .dnditem.draggable[ans_id]');
             const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
-            const result = [];
             const zoneMap = {};
             zones.forEach((z, i) => zoneMap[i] = []);
-
-            banks.forEach(item => {
+            bankItems.forEach((item, i) => {
                 const id = item.getAttribute('ans_id');
-                if (id) {
-                    const zoneIdx = parseInt(id) % zones.length;
-                    zoneMap[zoneIdx] = zoneMap[zoneIdx] || [];
-                    zoneMap[zoneIdx].push(id);
+                if (id && i < zones.length) {
+                    zoneMap[i].push(id);
                 }
             });
-
+            const result = [];
             Object.keys(zoneMap).forEach(k => {
                 const idx = parseInt(k);
                 if (zoneMap[k].length > 0) {
@@ -155,7 +158,7 @@ async function solveStandardCloze(page) {
             await page.click('#SeeAnswer');
             return false;
         }
-        console.log('⚠ Usando fallback de asignación secuencial');
+        console.log('⚠ Usando fallback por orden en banco');
         mapping.push(...fallback);
     }
 
@@ -165,24 +168,43 @@ async function solveStandardCloze(page) {
     });
 
     await page.click('#SeeAnswer');
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1200);
+
+    async function dragItemWithRetry(id, targetIdx, maxRetries) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const srcLoc = page.locator(`#bankContainer .dnditem.draggable[ans_id="${id}"]`).first();
+            const count = await srcLoc.count();
+            if (count === 0) {
+                console.log(`  ⚠ Item ${id} no está en banco (intento ${attempt})`);
+                return false;
+            }
+
+            const targetZone = page.locator('.prCLZ__regContainer .dndZone').nth(targetIdx);
+            const ok = await dragItemToTarget(page, srcLoc, targetZone);
+            if (!ok) {
+                console.log(`  ⚠ Drag falló para item ${id} (intento ${attempt})`);
+                await page.waitForTimeout(500);
+                continue;
+            }
+
+            const arrived = await page.evaluate(({ id, targetIdx }) => {
+                const zone = document.querySelectorAll('.prCLZ__regContainer .dndZone')[targetIdx];
+                return zone?.querySelector(`.dnditem[ans_id="${id}"]`) !== null;
+            }, { id, targetIdx });
+
+            if (arrived) return true;
+
+            console.log(`  ⚠ Item ${id} no llegó al destino (intento ${attempt})`);
+            await page.waitForTimeout(500);
+        }
+        return false;
+    }
 
     let moved = 0;
 
     for (const m of mapping) {
         for (const id of m.itemIds) {
-            const itemLoc = page.locator('#bankContainer ed-la-dnditem').filter({
-                has: page.locator(`.dnditem[ans_id="${id}"]`)
-            });
-            const count = await itemLoc.count();
-            if (count === 0) {
-                console.log(`⚠ Item ${id} no encontrado en banco`);
-                continue;
-            }
-
-            const targetZone = page.locator('.prCLZ__regContainer .dndZone').nth(m.zoneIdx);
-
-            const ok = await dragItemToTarget(page, itemLoc.first(), targetZone);
+            const ok = await dragItemWithRetry(id, m.zoneIdx, 2);
             if (ok) {
                 moved++;
                 console.log(`  ✓ Item ${id} → espacio ${m.zoneIdx}`);
@@ -191,34 +213,70 @@ async function solveStandardCloze(page) {
     }
 
     console.log(`✓ Movidos ${moved} item(s) a sus espacios`);
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(800);
 
-    const misplaced = await page.evaluate((mapping) => {
+    const corrections = await page.evaluate((mapping) => {
         const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
-        const missing = [];
+        const state = [];
+
         mapping.forEach((m, idx) => {
-            const item = zones[idx]?.querySelector('.dnditem');
-            const id = item?.getAttribute('ans_id');
-            if (id !== m.itemIds[0]) {
-                missing.push({ zoneIdx: idx, itemId: m.itemIds[0] });
-            }
+            const zone = zones[idx];
+            if (!zone) return;
+            const currentItem = zone.querySelector('.dnditem');
+            const currentId = currentItem?.getAttribute('ans_id') || null;
+            const targetId = m.itemIds[0] || null;
+            state.push({ zoneIdx: idx, currentId, targetId });
         });
-        return missing;
+
+        return state;
     }, mapping);
 
-    if (misplaced.length > 0) {
-        console.log(`⚠ ${misplaced.length} item(s) mal ubicados, corrigiendo...`);
-        for (const m of misplaced) {
-            const itemLoc = page.locator('#bankContainer ed-la-dnditem').filter({
-                has: page.locator(`.dnditem[ans_id="${m.itemId}"]`)
-            });
-            const count = await itemLoc.count();
-            if (count === 0) continue;
+    const needFix = corrections.filter(c => c.currentId !== c.targetId);
 
-            const targetZone = page.locator('.prCLZ__regContainer .dndZone').nth(m.zoneIdx);
-            const ok = await dragItemToTarget(page, itemLoc.first(), targetZone);
+    if (needFix.length > 0) {
+        console.log(`⚠ ${needFix.length} zona(s) con items incorrectos, corrigiendo...`);
+
+        for (const fix of needFix) {
+            const targetId = fix.targetId;
+            if (!targetId) continue;
+
+            const stillInBank = await page.locator(
+                `#bankContainer .dnditem.draggable[ans_id="${targetId}"]`
+            ).count();
+
+            if (stillInBank > 0) {
+                const ok = await dragItemWithRetry(targetId, fix.zoneIdx, 2);
+                if (ok) console.log(`  ✓ Corregido: item ${targetId} → espacio ${fix.zoneIdx}`);
+                continue;
+            }
+
+            const srcZone = await page.evaluate((targetId) => {
+                const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
+                for (let i = 0; i < zones.length; i++) {
+                    const item = zones[i]?.querySelector(`.dnditem[ans_id="${targetId}"]`);
+                    if (item) return i;
+                }
+                return -1;
+            }, targetId);
+
+            if (srcZone === -1) continue;
+
+            const srcItem = page.locator(
+                `.prCLZ__regContainer .dndZone .dnditem.draggable[ans_id="${targetId}"]`
+            ).first();
+            const tgtZone = page.locator('.prCLZ__regContainer .dndZone').nth(fix.zoneIdx);
+
+            const ok = await dragItemToTarget(page, srcItem, tgtZone);
             if (ok) {
-                console.log(`  ✓ Re-corregido item ${m.itemId} → espacio ${m.zoneIdx}`);
+                const arrived = await page.evaluate(({ targetId, zoneIdx: fixZoneIdx }) => {
+                    const zone = document.querySelectorAll('.prCLZ__regContainer .dndZone')[fixZoneIdx];
+                    return zone?.querySelector(`.dnditem[ans_id="${targetId}"]`) !== null;
+                }, { targetId, zoneIdx: fix.zoneIdx });
+
+                if (arrived) {
+                    moved++;
+                    console.log(`  ✓ Swap: item ${targetId} → espacio ${fix.zoneIdx}`);
+                }
             }
         }
     }

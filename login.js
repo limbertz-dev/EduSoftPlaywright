@@ -59,7 +59,7 @@ async function login(page) {
         'input[type="text"]',
         'input[placeholder*="user" i]',
         'input[placeholder*="usuario" i]'
-    ], 'VILLCAL');
+    ], 'AGUILARC');
     if (!userFilled) throw new Error('No se pudo encontrar el campo de usuario');
     console.log('✓ Usuario ingresado');
 
@@ -69,7 +69,7 @@ async function login(page) {
         'input[type="password"]',
         'input[placeholder*="pass" i]',
         'input[placeholder*="contraseña" i]'
-    ], '10654982');
+    ], '10660627');
     if (!passFilled) throw new Error('No se pudo encontrar el campo de contraseña');
     console.log('✓ Contraseña ingresada');
 
