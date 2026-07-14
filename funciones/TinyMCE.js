@@ -1,3 +1,5 @@
+const { FAST } = require('./utils.js');
+
 async function solveTinyMCE(page) {
     try {
         console.log('📌 Resolviendo TinyMCE (Editor de texto)');
@@ -24,7 +26,7 @@ async function solveTinyMCE(page) {
                             el?.click();
                         }
                     });
-                    await page.waitForTimeout(1500);
+                    await page.waitForTimeout(FAST.medium);
                 }
 
                 if (await seeAnswer.isVisible()) {
@@ -33,7 +35,7 @@ async function solveTinyMCE(page) {
                     await seeAnswer.click({ force: true });
                 }
                 console.log('✓ Click en SeeAnswer');
-                await page.waitForTimeout(1500);
+                await page.waitForTimeout(FAST.medium);
             }
         } catch (e) {
             console.log(`⚠ SeeAnswer: ${e.message}`);
@@ -164,7 +166,7 @@ async function solveTinyMCE(page) {
             const seeAnswer = page.locator('#SeeAnswer');
             if (await seeAnswer.isVisible()) {
                 await seeAnswer.click();
-                await page.waitForTimeout(1000);
+                await page.waitForTimeout(FAST.medium);
             }
         } catch { }
 
@@ -174,7 +176,7 @@ async function solveTinyMCE(page) {
 
         if (iframeExists > 0) {
             await iframe.locator('body').click();
-            await page.waitForTimeout(300);
+            await page.waitForTimeout(FAST.short);
 
             await page.evaluate((text) => {
                 const iframeEl = document.querySelector('iframe[id^="mce_"]');
@@ -211,10 +213,10 @@ async function solveTinyMCE(page) {
             }
         }
 
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(FAST.medium);
 
         const checkBtn = page.locator('#CheckAnswer');
-        await checkBtn.waitFor({ state: 'visible', timeout: 10000 });
+        await checkBtn.waitFor({ state: 'visible', timeout: FAST.actionTimeout });
         const isDisabled = await checkBtn.isDisabled();
         if (isDisabled) {
             console.log('⚠ CheckAnswer deshabilitado, forzando...');
@@ -223,7 +225,7 @@ async function solveTinyMCE(page) {
             await checkBtn.click();
         }
         console.log('✓ Click en CheckAnswer');
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(FAST.medium);
         return true;
     } catch (e) {
         console.log('✗ Error en TinyMCE:', e.message);

@@ -1,12 +1,72 @@
-const { verifyCorrect, waitForCheckAnswer } = require('./utils.js');
+const { verifyCorrect, waitForCheckAnswer, waitAfterSeeAnswer, clickSeeAnswer, FAST } = require('./utils.js');
+
+async function selectMcqOption(page, id) {
+    return await page.evaluate((id) => {
+        const dispatch = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+        const el = document.getElementById(id);
+        if (!el) return { ok: false, reason: 'missing' };
+
+        const input = el.matches?.('input[type="radio"], input[type="checkbox"]')
+            ? el
+            : el.querySelector?.('input[type="radio"], input[type="checkbox"]');
+
+        const label = input?.id ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`) : null;
+        const wrapper = input?.closest?.(
+            '.lessonMultipleAnswer, .multiRadio, .multiRadioWrapper, .multiCheck, ' +
+            '.prMCQ__item, .prMCQ__multiCheck--container, li, tr, div'
+        );
+        const clickable = label || wrapper || el;
+
+        clickable.scrollIntoView({ block: 'center', inline: 'center' });
+        clickable.click();
+
+        if (input && !input.checked) {
+            input.checked = true;
+            dispatch(input, 'input');
+            dispatch(input, 'change');
+            dispatch(input, 'click');
+        }
+
+        ['input', 'change', 'keyup', 'blur'].forEach(type => dispatch(clickable, type));
+        return { ok: true };
+    }, id);
+}
+
+async function getUnselectedMcqIds(page, ids) {
+    return await page.evaluate((ids) => {
+        const selectedClasses = ['selected', 'active', 'checked', 'is-selected', 'is-checked', 'c'];
+
+        const isOptionSelected = (id) => {
+            const el = document.getElementById(id);
+            if (!el) return false;
+
+            const input = el.matches?.('input[type="radio"], input[type="checkbox"]')
+                ? el
+                : el.querySelector?.('input[type="radio"], input[type="checkbox"]');
+            if (input?.checked || input?.getAttribute('aria-checked') === 'true') return true;
+
+            const option = input?.closest?.(
+                '.lessonMultipleAnswer, .multiRadio, .multiRadioWrapper, .multiCheck, ' +
+                '.prMCQ__item, .prMCQ__multiCheck--container, li, tr, div'
+            ) || el;
+
+            if (option.getAttribute?.('aria-checked') === 'true') return true;
+            if (selectedClasses.some(cls => option.classList?.contains(cls) || el.classList?.contains(cls))) return true;
+
+            const label = input?.id ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`) : null;
+            return !!label && selectedClasses.some(cls => label.classList?.contains(cls));
+        };
+
+        return ids.filter(id => !isOptionSelected(id));
+    }, ids);
+}
 
 async function solveMCQ(page) {
     try {
-        console.log('📌 Resolviendo MCQ (Selección Única/Múltiple)');
+        console.log('Resolviendo MCQ (Seleccion Unica/Multiple)');
 
-        await page.waitForSelector('#SeeAnswer', { timeout: 10000 });
-        await page.click('#SeeAnswer');
-        await page.waitForTimeout(1500);
+        await clickSeeAnswer(page);
+        await waitAfterSeeAnswer(page);
 
         let correctIds = [];
 
@@ -21,28 +81,28 @@ async function solveMCQ(page) {
             'input[type="radio"]:checked, input[type="checkbox"]:checked',
             '.multiCheck.correct',
             '.correct .answerText, .correct .multiRadio--text',
-            '.c .multiTextInline, .c .multiRadio--text, .c .answerText',
+            '.c .multiTextInline, .c .multiRadio--text, .c .answerText'
         ];
 
         for (const sel of patterns) {
-            const els = await page.$$(sel);
-            const ids = [];
-            for (const el of els) {
-                const tag = await el.evaluate(e => e.tagName.toLowerCase());
-                if (tag === 'input') {
-                    const id = await el.getAttribute('id');
-                    if (id) ids.push(id);
-                } else {
-                    const childId = await el.evaluate(e => {
-                        const inp = e.querySelector('input');
-                        return inp?.getAttribute('id') || '';
-                    });
-                    if (childId) ids.push(childId);
-                }
-            }
+            const ids = await page.evaluate((sel) => {
+                return Array.from(document.querySelectorAll(sel)).map(el => {
+                    if (el.matches?.('input[type="radio"], input[type="checkbox"]')) {
+                        return el.id || '';
+                    }
+
+                    const input = el.querySelector?.('input[type="radio"], input[type="checkbox"]') ||
+                        el.closest?.('.lessonMultipleAnswer, .multiRadio, .multiRadioWrapper, .multiCheck, .prMCQ__item, .prMCQ__multiCheck--container')?.querySelector?.('input[type="radio"], input[type="checkbox"]');
+                    if (input?.id) return input.id;
+
+                    const option = el.closest?.('[id]');
+                    return option?.id || el.id || '';
+                }).filter(Boolean);
+            }, sel);
+
             if (ids.length > 0) {
-                correctIds = ids;
-                console.log(`✓ Detectados ${correctIds.length} correctos por selector: ${sel}`);
+                correctIds = [...new Set(ids)];
+                console.log(`Detectados ${correctIds.length} correctos por selector: ${sel}`);
                 break;
             }
         }
@@ -52,72 +112,51 @@ async function solveMCQ(page) {
                 const corrects = document.querySelectorAll('.multiRadioWrapper.correct, .multiRadio.correct, .lessonMultipleAnswer.c, .c');
                 const result = [];
                 corrects.forEach(el => {
-                    const inp = el.querySelector('input[id]');
-                    if (inp) result.push(inp.getAttribute('id'));
+                    const input = el.querySelector('input[id]');
+                    const option = el.closest('[id]');
+                    if (input?.id) result.push(input.id);
+                    else if (option?.id) result.push(option.id);
                 });
-                return result;
+                return [...new Set(result)];
             });
             if (idsWithText.length > 0) {
                 correctIds = idsWithText;
-                console.log(`✓ Detectados ${correctIds.length} correctos por clase "correct"`);
+                console.log(`Detectados ${correctIds.length} correctos por clase correct/c`);
             }
         }
 
         if (correctIds.length === 0) {
-            const checkedInfo = await page.evaluate(() => {
-                const checked = document.querySelectorAll('input[type="checkbox"]:checked, input[type="radio"]:checked');
-                return Array.from(checked).map(c => ({
-                    id: c.getAttribute('id'),
-                    parentId: c.closest('[id]')?.getAttribute('id') || '',
-                    text: c.closest('.lessonMultipleAnswer')?.querySelector('.multiTextInline, .multiRadio--text, .answerText')?.textContent?.trim() || ''
-                })).filter(x => x.text);
-            });
-
-            if (checkedInfo.length > 0) {
-                correctIds = checkedInfo.map(x => x.id || x.parentId);
-                console.log(`✓ Detectados ${correctIds.length} correctos por input:checked`);
-            }
-        }
-
-        if (correctIds.length === 0) {
-            console.log('⚠ No se pudo detectar la respuesta correcta');
-            await page.click('#SeeAnswer');
+            console.log('No se pudo detectar la respuesta correcta');
+            await clickSeeAnswer(page);
             return false;
         }
 
-        console.log(`✓ IDs correctos: [${correctIds.join(', ')}]`);
-        await page.click('#SeeAnswer');
-        await page.waitForTimeout(800);
+        console.log(`IDs correctos: [${correctIds.join(', ')}]`);
+        await clickSeeAnswer(page);
+        await page.waitForTimeout(FAST.medium);
 
         for (const id of correctIds) {
             try {
-                console.log(`📌 Seleccionando id="${id}"`);
-
-                const input = page.locator(`#${id}`);
-                const inputCount = await input.count();
-
-                if (inputCount > 0) {
-                    await input.first().click({ force: true });
-                } else {
-                    const fallback = page.locator(`[id="${id}"] input[type="radio"], [id="${id}"] input[type="checkbox"]`);
-                    const fbCount = await fallback.count();
-                    if (fbCount > 0) {
-                        await fallback.first().click({ force: true });
-                    } else {
-                        console.log(`⚠ Elemento #${id} no encontrado`);
-                        continue;
-                    }
+                console.log(`Seleccionando id="${id}"`);
+                const result = await selectMcqOption(page, id);
+                if (!result.ok) {
+                    console.log(`Elemento #${id} no encontrado (${result.reason})`);
                 }
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(FAST.short);
             } catch (e) {
-                console.log(`⚠ Error seleccionando id="${id}": ${e.message}`);
+                console.log(`Error seleccionando id="${id}": ${e.message}`);
             }
+        }
+
+        const notSelected = await getUnselectedMcqIds(page, correctIds);
+        if (notSelected.length > 0) {
+            console.log(`MCQ no confirmo seleccion visual/input para [${notSelected.join(', ')}]; se validara con CheckAnswer`);
         }
 
         await waitForCheckAnswer(page);
         return await verifyCorrect(page);
     } catch (e) {
-        console.log('✗ Error en MCQ:', e.message);
+        console.log('Error en MCQ:', e.message);
         return false;
     }
 }

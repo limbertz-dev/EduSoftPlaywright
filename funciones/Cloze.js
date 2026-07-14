@@ -1,10 +1,10 @@
-const { verifyCorrect, waitForCheckAnswer, dragItemToTarget } = require('./utils.js');
+const { verifyCorrect, waitForCheckAnswer, dragItemToTarget, waitAfterSeeAnswer, clickSeeAnswer, FAST } = require('./utils.js');
 
 async function solveWordsBankCloze(page) {
     console.log('📌 Resolviendo Words Bank Cloze (con imagen/texto)');
 
-    await page.click('#SeeAnswer');
-    await page.waitForTimeout(1500);
+    await clickSeeAnswer(page);
+    await waitAfterSeeAnswer(page);
 
     const mapping = await page.evaluate(() => {
         const targets = document.querySelectorAll('.TTpanswerDiv.droptarget');
@@ -46,7 +46,7 @@ async function solveWordsBankCloze(page) {
 
     if (mapping.length === 0) {
         console.log('⚠ No se pudo determinar el mapeo de respuestas');
-        await page.click('#SeeAnswer');
+        await clickSeeAnswer(page);
         return false;
     }
 
@@ -55,8 +55,8 @@ async function solveWordsBankCloze(page) {
         console.log(`  Espacio ${m.zoneIdx} -> itemId ${m.itemId}`);
     });
 
-    await page.click('#SeeAnswer');
-    await page.waitForTimeout(1200);
+    await clickSeeAnswer(page);
+    await page.waitForTimeout(FAST.medium);
 
     async function dragWordWithRetry(itemId, targetIdx, maxRetries) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -71,7 +71,7 @@ async function solveWordsBankCloze(page) {
             const ok = await dragItemToTarget(page, srcLoc, tgtLoc);
             if (!ok) {
                 console.log(`  ⚠ Drag falló para item ${itemId} (intento ${attempt})`);
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(FAST.short);
                 continue;
             }
 
@@ -85,7 +85,7 @@ async function solveWordsBankCloze(page) {
             if (arrived) return true;
 
             console.log(`  ⚠ Item ${itemId} no llegó al destino (intento ${attempt})`);
-            await page.waitForTimeout(500);
+            await page.waitForTimeout(FAST.short);
         }
         return false;
     }
@@ -102,7 +102,20 @@ async function solveWordsBankCloze(page) {
     }
 
     console.log(`✓ Movidos ${moved} item(s)`);
-    await page.waitForTimeout(1500);
+    const missingWords = await page.evaluate((mapping) => {
+        const targets = document.querySelectorAll('.TTpanswerDiv.droptarget');
+        return mapping.filter(m => {
+            const target = targets[m.zoneIdx];
+            return !target?.querySelector(`.wordBankTile[data-id="${m.itemId}"]`);
+        });
+    }, mapping);
+
+    if (missingWords.length > 0) {
+        console.log(`Words Bank Cloze incompleto: faltan ${missingWords.length} item(s)`);
+        return false;
+    }
+
+    await page.waitForTimeout(FAST.medium);
 
     await waitForCheckAnswer(page);
     return await verifyCorrect(page);
@@ -111,8 +124,8 @@ async function solveWordsBankCloze(page) {
 async function solveStandardCloze(page) {
     console.log('📌 Resolviendo Cloze estándar (Completar texto)');
 
-    await page.click('#SeeAnswer');
-    await page.waitForTimeout(1500);
+    await clickSeeAnswer(page);
+    await waitAfterSeeAnswer(page);
 
     const mapping = await page.evaluate(() => {
         const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
@@ -155,7 +168,7 @@ async function solveStandardCloze(page) {
 
         if (fallback.length === 0) {
             console.log('⚠ No se detectaron respuestas');
-            await page.click('#SeeAnswer');
+            await clickSeeAnswer(page);
             return false;
         }
         console.log('⚠ Usando fallback por orden en banco');
@@ -167,8 +180,8 @@ async function solveStandardCloze(page) {
         console.log(`  Espacio ${m.zoneIdx}: ids [${m.itemIds.join(', ')}]`);
     });
 
-    await page.click('#SeeAnswer');
-    await page.waitForTimeout(1200);
+    await clickSeeAnswer(page);
+    await page.waitForTimeout(FAST.medium);
 
     async function dragItemWithRetry(id, targetIdx, maxRetries) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -183,7 +196,7 @@ async function solveStandardCloze(page) {
             const ok = await dragItemToTarget(page, srcLoc, targetZone);
             if (!ok) {
                 console.log(`  ⚠ Drag falló para item ${id} (intento ${attempt})`);
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(FAST.short);
                 continue;
             }
 
@@ -195,7 +208,7 @@ async function solveStandardCloze(page) {
             if (arrived) return true;
 
             console.log(`  ⚠ Item ${id} no llegó al destino (intento ${attempt})`);
-            await page.waitForTimeout(500);
+            await page.waitForTimeout(FAST.short);
         }
         return false;
     }
@@ -213,7 +226,7 @@ async function solveStandardCloze(page) {
     }
 
     console.log(`✓ Movidos ${moved} item(s) a sus espacios`);
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(FAST.medium);
 
     const corrections = await page.evaluate((mapping) => {
         const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
@@ -281,7 +294,26 @@ async function solveStandardCloze(page) {
         }
     }
 
-    await page.waitForTimeout(1500);
+    const finalMissing = await page.evaluate((mapping) => {
+        const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
+        const missing = [];
+        mapping.forEach(m => {
+            const zone = zones[m.zoneIdx];
+            m.itemIds.forEach(id => {
+                if (!zone?.querySelector(`.dnditem[ans_id="${id}"]`)) {
+                    missing.push({ zoneIdx: m.zoneIdx, id });
+                }
+            });
+        });
+        return missing;
+    }, mapping);
+
+    if (finalMissing.length > 0) {
+        console.log(`Cloze incompleto: faltan ${finalMissing.length} item(s)`);
+        return false;
+    }
+
+    await page.waitForTimeout(FAST.medium);
 
     await waitForCheckAnswer(page);
     return await verifyCorrect(page);
@@ -289,7 +321,7 @@ async function solveStandardCloze(page) {
 
 async function solveCloze(page) {
     try {
-        await page.waitForSelector('#SeeAnswer', { timeout: 10000 });
+        await page.waitForSelector('#SeeAnswer', { timeout: FAST.actionTimeout });
 
         const variant = await page.evaluate(() => {
             if (document.querySelector('.wordsBankTable') || document.querySelector('.TTpanswerDiv')) return 'wordsbank';

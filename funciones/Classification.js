@@ -1,12 +1,11 @@
-const { verifyCorrect, waitForCheckAnswer, dragItemToTarget } = require('./utils.js');
+const { verifyCorrect, waitForCheckAnswer, dragItemToTarget, waitAfterSeeAnswer, clickSeeAnswer, FAST } = require('./utils.js');
 
 async function solveClassification(page) {
     try {
         console.log('📌 Resolviendo Classification (Arrastrar)');
 
-        await page.waitForSelector('#SeeAnswer', { timeout: 10000 });
-        await page.click('#SeeAnswer');
-        await page.waitForTimeout(1500);
+        await clickSeeAnswer(page);
+        await waitAfterSeeAnswer(page);
 
         const mapping = await page.evaluate(() => {
             const containers = document.querySelectorAll('.prCl__container--normal');
@@ -29,7 +28,7 @@ async function solveClassification(page) {
 
         if (mapping.length === 0) {
             console.log('⚠ No se detectaron items clasificados');
-            await page.click('#SeeAnswer');
+            await clickSeeAnswer(page);
             return false;
         }
 
@@ -39,8 +38,8 @@ async function solveClassification(page) {
             g.items.forEach(item => console.log(`    - ${item.text}`));
         });
 
-        await page.click('#SeeAnswer');
-        await page.waitForTimeout(1200);
+        await clickSeeAnswer(page);
+        await page.waitForTimeout(FAST.medium);
 
         async function dragItemWithRetry(itemId, containerIdx, maxRetries) {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -57,7 +56,7 @@ async function solveClassification(page) {
                 const ok = await dragItemToTarget(page, srcLoc, tgtZone);
                 if (!ok) {
                     console.log(`  ⚠ Drag falló para item ${itemId} (intento ${attempt})`);
-                    await page.waitForTimeout(500);
+                    await page.waitForTimeout(FAST.short);
                     continue;
                 }
 
@@ -71,7 +70,7 @@ async function solveClassification(page) {
                 if (arrived) return true;
 
                 console.log(`  ⚠ Item ${itemId} no llegó al destino (intento ${attempt})`);
-                await page.waitForTimeout(500);
+                await page.waitForTimeout(FAST.short);
             }
             return false;
         }
@@ -89,7 +88,7 @@ async function solveClassification(page) {
         }
 
         console.log(`✓ Movidos ${moved} item(s) a sus contenedores`);
-        await page.waitForTimeout(800);
+        await page.waitForTimeout(FAST.medium);
 
         const corrections = await page.evaluate((mapping) => {
             const containers = document.querySelectorAll('.prCl__container--normal');
@@ -166,7 +165,27 @@ async function solveClassification(page) {
             }
         }
 
-        await page.waitForTimeout(1500);
+        const finalMissing = await page.evaluate((mapping) => {
+            const containers = document.querySelectorAll('.prCl__container--normal');
+            const missing = [];
+            mapping.forEach(g => {
+                const container = containers[g.containerIdx];
+                const zone = container?.querySelector('.dndZone');
+                g.items.forEach(item => {
+                    if (item.id && !zone?.querySelector(`.dnditem[ans_id="${item.id}"]`)) {
+                        missing.push({ containerIdx: g.containerIdx, id: item.id });
+                    }
+                });
+            });
+            return missing;
+        }, mapping);
+
+        if (finalMissing.length > 0) {
+            console.log(`Classification incompleto: faltan ${finalMissing.length} item(s)`);
+            return false;
+        }
+
+        await page.waitForTimeout(FAST.medium);
 
         await waitForCheckAnswer(page);
         return await verifyCorrect(page);

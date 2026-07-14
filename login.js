@@ -1,7 +1,7 @@
 async function fillWithFallback(page, selectors, value) {
     for (const selector of selectors) {
         try {
-            await page.fill(selector, value, { timeout: 3000 });
+            await page.fill(selector, value, { timeout: 1500 });
             return true;
         } catch (e) {
             continue;
@@ -13,7 +13,7 @@ async function fillWithFallback(page, selectors, value) {
 async function clickWithFallback(page, selectors) {
     for (const selector of selectors) {
         try {
-            await page.click(selector, { timeout: 3000 });
+            await page.click(selector, { timeout: 1500 });
             return true;
         } catch (e) {
             continue;
@@ -24,7 +24,7 @@ async function clickWithFallback(page, selectors) {
 
 async function handleAlreadyLoggedInModal(page) {
     try {
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(300);
         const modal = await page.$('text=You are already logged in');
         if (modal) {
             console.log('⚠ Modal detectado: Ya estás logueado en otro dispositivo');
@@ -39,7 +39,7 @@ async function handleAlreadyLoggedInModal(page) {
             ]);
             if (clicked) {
                 console.log('✓ Botón "Login on This Device" presionado');
-                await page.waitForTimeout(2000);
+                await page.waitForTimeout(500);
                 return true;
             }
         }
@@ -59,7 +59,7 @@ async function login(page) {
         'input[type="text"]',
         'input[placeholder*="user" i]',
         'input[placeholder*="usuario" i]'
-    ], 'AGUILARC');
+    ], 'VILLCAL');
     if (!userFilled) throw new Error('No se pudo encontrar el campo de usuario');
     console.log('✓ Usuario ingresado');
 
@@ -69,7 +69,7 @@ async function login(page) {
         'input[type="password"]',
         'input[placeholder*="pass" i]',
         'input[placeholder*="contraseña" i]'
-    ], '10660627');
+    ], '10654982');
     if (!passFilled) throw new Error('No se pudo encontrar el campo de contraseña');
     console.log('✓ Contraseña ingresada');
 
@@ -88,7 +88,7 @@ async function login(page) {
 
     await handleAlreadyLoggedInModal(page);
     await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(500);
 
     const currentUrl = page.url();
     if (!currentUrl.toLowerCase().includes('login')) {
