@@ -7,9 +7,20 @@ async function solveWordsBankCloze(page) {
     await waitAfterSeeAnswer(page);
 
     const mapping = await page.evaluate(() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.visibility !== 'hidden' &&
+                style.display !== 'none' &&
+                rect.width > 0 &&
+                rect.height > 0;
+        };
+
         const targets = document.querySelectorAll('.TTpanswerDiv.droptarget');
         const result = [];
         targets.forEach((target, idx) => {
+            if (!isVisible(target)) return;
             const ans = target.getAttribute('ans');
             if (ans && ans.trim() !== '') {
                 result.push({ zoneIdx: idx, itemId: ans.trim() });
@@ -21,16 +32,28 @@ async function solveWordsBankCloze(page) {
     if (mapping.length === 0) {
         console.log('⚠ No se detectaron respuestas via ans, intentando mapeo por texto...');
         const textMapping = await page.evaluate(() => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden' &&
+                    style.display !== 'none' &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+
             const targets = document.querySelectorAll('.TTpanswerDiv.droptarget');
-            const words = document.querySelectorAll('.draggable.wordBankTile');
+            const words = document.querySelectorAll('.wordsBankTable .draggable[data-id]');
             const wordMap = {};
             words.forEach(w => {
+                if (!isVisible(w)) return;
                 const id = w.getAttribute('data-id');
                 const text = w.textContent.trim();
                 if (id) wordMap[text] = id;
             });
             const result = [];
             targets.forEach((target, idx) => {
+                if (!isVisible(target)) return;
                 const text = target.textContent.trim();
                 if (text && wordMap[text]) {
                     result.push({ zoneIdx: idx, itemId: wordMap[text] });
@@ -58,9 +81,56 @@ async function solveWordsBankCloze(page) {
     await clickSeeAnswer(page);
     await page.waitForTimeout(FAST.medium);
 
+    async function isWordInTarget(itemId, targetIdx) {
+        return await page.evaluate(({ itemId, targetIdx }) => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden' &&
+                    style.display !== 'none' &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+
+            const overlaps = (a, b) => {
+                const horizontal = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+                const vertical = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+                return horizontal > 0 && vertical > 0;
+            };
+
+            const target = document.querySelectorAll('.TTpanswerDiv.droptarget')[targetIdx];
+            if (!isVisible(target)) return false;
+
+            if (target.querySelector(`.draggable[data-id="${CSS.escape(itemId)}"]`)) return true;
+
+            const targetRect = target.getBoundingClientRect();
+            const expandedTarget = {
+                left: targetRect.left - 8,
+                right: targetRect.right + 8,
+                top: targetRect.top - 8,
+                bottom: targetRect.bottom + 8
+            };
+
+            return Array.from(document.querySelectorAll(`.draggable[data-id="${CSS.escape(itemId)}"]`))
+                .filter(isVisible)
+                .some(item => {
+                    const itemRect = item.getBoundingClientRect();
+                    const centerX = itemRect.left + itemRect.width / 2;
+                    const centerY = itemRect.top + itemRect.height / 2;
+                    const centerInside = centerX >= expandedTarget.left &&
+                        centerX <= expandedTarget.right &&
+                        centerY >= expandedTarget.top &&
+                        centerY <= expandedTarget.bottom;
+
+                    return centerInside || overlaps(itemRect, expandedTarget);
+                });
+        }, { itemId, targetIdx });
+    }
+
     async function dragWordWithRetry(itemId, targetIdx, maxRetries) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            const srcLoc = page.locator(`.draggable.wordBankTile[data-id="${itemId}"]`).first();
+            const srcLoc = page.locator(`.wordsBankTable .draggable[data-id="${itemId}"]`).first();
             const count = await srcLoc.count();
             if (count === 0) {
                 console.log(`  ⚠ Item ${itemId} no está en banco (intento ${attempt})`);
@@ -75,12 +145,7 @@ async function solveWordsBankCloze(page) {
                 continue;
             }
 
-            const arrived = await page.evaluate(({ itemId, targetIdx }) => {
-                const target = document.querySelectorAll('.TTpanswerDiv.droptarget')[targetIdx];
-                if (!target) return false;
-                const item = target.querySelector(`.wordBankTile[data-id="${itemId}"]`);
-                return item !== null;
-            }, { itemId, targetIdx });
+            const arrived = await isWordInTarget(itemId, targetIdx);
 
             if (arrived) return true;
 
@@ -102,13 +167,12 @@ async function solveWordsBankCloze(page) {
     }
 
     console.log(`✓ Movidos ${moved} item(s)`);
-    const missingWords = await page.evaluate((mapping) => {
-        const targets = document.querySelectorAll('.TTpanswerDiv.droptarget');
-        return mapping.filter(m => {
-            const target = targets[m.zoneIdx];
-            return !target?.querySelector(`.wordBankTile[data-id="${m.itemId}"]`);
-        });
-    }, mapping);
+    const missingWords = [];
+    for (const m of mapping) {
+        if (!await isWordInTarget(m.itemId, m.zoneIdx)) {
+            missingWords.push(m);
+        }
+    }
 
     if (missingWords.length > 0) {
         console.log(`Words Bank Cloze incompleto: faltan ${missingWords.length} item(s)`);
@@ -128,9 +192,20 @@ async function solveStandardCloze(page) {
     await waitAfterSeeAnswer(page);
 
     const mapping = await page.evaluate(() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.visibility !== 'hidden' &&
+                style.display !== 'none' &&
+                rect.width > 0 &&
+                rect.height > 0;
+        };
+
         const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
         const result = [];
         zones.forEach((zone, idx) => {
+            if (!isVisible(zone)) return;
             const items = zone.querySelectorAll('.dnditem');
             const itemIds = [];
             items.forEach(item => {
@@ -146,14 +221,27 @@ async function solveStandardCloze(page) {
 
     if (mapping.length === 0) {
         const fallback = await page.evaluate(() => {
-            const bankItems = document.querySelectorAll('#bankContainer .dnditem.draggable[ans_id]');
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden' &&
+                    style.display !== 'none' &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+
+            const bankItems = Array.from(document.querySelectorAll('#bankContainer .dnditem.draggable[ans_id]')).filter(isVisible);
             const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
             const zoneMap = {};
-            zones.forEach((z, i) => zoneMap[i] = []);
+            zones.forEach((z, i) => {
+                if (isVisible(z)) zoneMap[i] = [];
+            });
             bankItems.forEach((item, i) => {
                 const id = item.getAttribute('ans_id');
-                if (id && i < zones.length) {
-                    zoneMap[i].push(id);
+                const targetZoneIdx = Object.keys(zoneMap).map(Number)[i];
+                if (id && targetZoneIdx !== undefined) {
+                    zoneMap[targetZoneIdx].push(id);
                 }
             });
             const result = [];
@@ -232,13 +320,13 @@ async function solveStandardCloze(page) {
         const zones = document.querySelectorAll('.prCLZ__regContainer .dndZone');
         const state = [];
 
-        mapping.forEach((m, idx) => {
-            const zone = zones[idx];
+        mapping.forEach((m) => {
+            const zone = zones[m.zoneIdx];
             if (!zone) return;
             const currentItem = zone.querySelector('.dnditem');
             const currentId = currentItem?.getAttribute('ans_id') || null;
             const targetId = m.itemIds[0] || null;
-            state.push({ zoneIdx: idx, currentId, targetId });
+            state.push({ zoneIdx: m.zoneIdx, currentId, targetId });
         });
 
         return state;
@@ -324,8 +412,28 @@ async function solveCloze(page) {
         await page.waitForSelector('#SeeAnswer', { timeout: FAST.actionTimeout });
 
         const variant = await page.evaluate(() => {
-            if (document.querySelector('.wordsBankTable') || document.querySelector('.TTpanswerDiv')) return 'wordsbank';
-            if (document.querySelector('.prCLZ__regContainer')) return 'standard';
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden' &&
+                    style.display !== 'none' &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+            const hasVisible = (selector) => Array.from(document.querySelectorAll(selector)).some(isVisible);
+            const hasVisibleWordsBank = (
+                hasVisible('.wordsBankTable .wordBankTile, .wordsBankTable .draggable') ||
+                (hasVisible('.TTpanswerDiv.droptarget') && hasVisible('.draggable.wordBankTile'))
+            );
+            const hasVisibleStandard = (
+                hasVisible('.prCLZ__main') &&
+                hasVisible('.prCLZ__regContainer .dndZone') &&
+                hasVisible('#bankContainer .dnditem[ans_id], #bankContainer .dnditem.draggable')
+            );
+
+            if (hasVisibleWordsBank) return 'wordsbank';
+            if (hasVisibleStandard) return 'standard';
             return null;
         });
 

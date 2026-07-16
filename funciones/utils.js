@@ -10,14 +10,35 @@ const FAST = {
 async function waitAfterSeeAnswer(page) {
     try {
         await page.waitForFunction(() => {
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.visibility !== 'hidden' &&
+                    style.display !== 'none' &&
+                    rect.width > 0 &&
+                    rect.height > 0;
+            };
+
+            const hasVisible = (selector) => {
+                return Array.from(document.querySelectorAll(selector)).some(isVisible);
+            };
+
             const hasOpenEndedAnswer = Array.from(document.querySelectorAll(
                 'textarea, .prOpenEnded__qaItemText--input, input.prOpenEnded__qaItemText[type="text"]'
-            )).some(el => (el.value || el.getAttribute('ng-reflect-model') || '').trim());
+            )).some(el => isVisible(el) && (el.value || el.getAttribute('ng-reflect-model') || '').trim());
 
-            return !!document.querySelector(
-                '.correct, .lessonMultipleAnswer.c, .dndZone .dnditem, ' +
+            return hasVisible(
+                '.correct, .lessonMultipleAnswer.c, ' +
                 '.DDLOptions__selected[id*="aid_"], ' +
                 'iframe[id^="mce_"], #tinymce'
+            ) || hasVisible(
+                '.prCLZ__regContainer .dndZone .dnditem[ans_id], ' +
+                '.prMT_T2T__answersRow .dndZone .dnditem[ans_id], ' +
+                '.prSeq__containerW .dnditem[ans_id], ' +
+                '.prCl__container--normal .dndZone .dnditem[ans_id], ' +
+                '.TTpanswerDiv.droptarget .wordBankTile[data-id], ' +
+                '.wordsBankTable .wordBankTilePlaced[data-id]'
             ) || hasOpenEndedAnswer;
         }, { timeout: 2500, polling: 100 });
     } catch {

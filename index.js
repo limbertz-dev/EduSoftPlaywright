@@ -1,3 +1,6 @@
+const { loadEnv } = require('./env.js');
+loadEnv();
+
 const { chromium } = require('playwright');
 const { login } = require('./login.js');
 const { solveMCQ } = require('./funciones/MCQ.js');
@@ -9,6 +12,8 @@ const { solveCloze } = require('./funciones/Cloze.js');
 const { solveSequence } = require('./funciones/Sequence.js');
 const { solveTinyMCE } = require('./funciones/TinyMCE.js');
 const { getCompletionState } = require('./funciones/utils.js');
+const { solveTestExercise } = require('./funcionestest/index.js');
+const { getTestCompletionState, isTargetClosedError } = require('./funcionestest/utils.js');
 
 const MAX_RETRIES = Number(process.env.MAX_RETRIES || 2);
 const MAX_STUCK_RETRIES = Number(process.env.MAX_STUCK_RETRIES || 5);
@@ -39,33 +44,84 @@ const nameMap = {
 
 function detectExercise() {
     const body = document.body;
+    const isVisible = (el) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.visibility !== 'hidden' &&
+            style.display !== 'none' &&
+            rect.width > 0 &&
+            rect.height > 0;
+    };
+    const hasVisible = (selector) => Array.from(document.querySelectorAll(selector)).some(isVisible);
+    const hasVisibleInput = () => Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"]')).some(input => {
+        const label = input.id ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`) : null;
+        const wrapper = input.closest?.('.lessonMultipleAnswer, .multiRadio, .multiRadioWrapper, .multiCheck, .prMCQ__item, .prMCQ__multiCheck--container');
+        return isVisible(input) || isVisible(label) || isVisible(wrapper);
+    });
+    const hasVisibleWordsBankCloze = () => (
+        hasVisible('.wordsBankTable .wordBankTile, .wordsBankTable .draggable') ||
+        (hasVisible('.TTpanswerDiv.droptarget') && hasVisible('.draggable.wordBankTile'))
+    );
+    const hasVisibleStandardCloze = () => (
+        hasVisible('.prCLZ__main') &&
+        hasVisible('.prCLZ__regContainer .dndZone') &&
+        hasVisible('#bankContainer .dnditem[ans_id], #bankContainer .dnditem.draggable')
+    );
     let type = null;
     if (body.classList.contains('learning__main--openEnded')) type = 'openEnded';
-    else if (body.classList.contains('learning__main--MCQ') || document.querySelector('input[type="radio"], input[type="checkbox"]')) type = 'mcq';
-    else if (document.querySelector('.prCl__main.classification')) type = 'classification';
-    else if (document.querySelector('.prMT_T2T__main')) type = 'matching';
-    else if (document.querySelector('.prFITB__main')) type = 'fitb';
-    else if (document.querySelector('.prCLZ__main') || document.querySelector('.wordsBankTable') || document.querySelector('.TTpanswerDiv')) type = 'cloze';
-    else if (document.querySelector('.prSeq__main')) type = 'sequence';
-    else if (document.querySelector('#SeeAnswer') && document.querySelector('iframe[id^="mce_"], #tinymce, .tox-tinymce')) type = 'tinymce';
+    else if (body.classList.contains('learning__main--MCQ') || hasVisibleInput()) type = 'mcq';
+    else if (hasVisible('.prCl__main.classification')) type = 'classification';
+    else if (hasVisible('.prMT_T2T__main')) type = 'matching';
+    else if (hasVisible('.prFITB__main')) type = 'fitb';
+    else if (hasVisibleWordsBankCloze() || hasVisibleStandardCloze()) type = 'cloze';
+    else if (hasVisible('.prSeq__main')) type = 'sequence';
+    else if (document.querySelector('#SeeAnswer') && hasVisible('iframe[id^="mce_"], #tinymce, .tox-tinymce')) type = 'tinymce';
 
     const hasCheckAnswer = !!document.querySelector('#CheckAnswer');
     const hasSeeAnswer = !!document.querySelector('#SeeAnswer');
     const btnText = document.querySelector('.tasksBtnext')?.textContent?.trim() || '';
-    return { type, hasCheckAnswer, hasSeeAnswer, btnText };
+    const stepTitle = document.querySelector('#learning__dropDownListTitleW_steps .learning__dropDownListTitle')?.textContent?.trim() || '';
+    const isTest = !hasSeeAnswer || /test/i.test(stepTitle);
+    return { type, hasCheckAnswer, hasSeeAnswer, btnText, stepTitle, isTest };
 }
 
 async function waitForExercise(page) {
     await page.waitForFunction(() => {
+        const isVisible = (el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.visibility !== 'hidden' &&
+                style.display !== 'none' &&
+                rect.width > 0 &&
+                rect.height > 0;
+        };
+        const hasVisible = (selector) => Array.from(document.querySelectorAll(selector)).some(isVisible);
+        const hasVisibleInput = () => Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"]')).some(input => {
+            const label = input.id ? document.querySelector(`label[for="${CSS.escape(input.id)}"]`) : null;
+            const wrapper = input.closest?.('.lessonMultipleAnswer, .multiRadio, .multiRadioWrapper, .multiCheck, .prMCQ__item, .prMCQ__multiCheck--container');
+            return isVisible(input) || isVisible(label) || isVisible(wrapper);
+        });
+        const hasVisibleWordsBankCloze = (
+            hasVisible('.wordsBankTable .wordBankTile, .wordsBankTable .draggable') ||
+            (hasVisible('.TTpanswerDiv.droptarget') && hasVisible('.draggable.wordBankTile'))
+        );
+        const hasVisibleStandardCloze = (
+            hasVisible('.prCLZ__main') &&
+            hasVisible('.prCLZ__regContainer .dndZone') &&
+            hasVisible('#bankContainer .dnditem[ans_id], #bankContainer .dnditem.draggable')
+        );
+
         if (!location.href.includes('learningArea')) return false;
         return !!(
             document.body.classList.contains('learning__main--openEnded') ||
             document.body.classList.contains('learning__main--MCQ') ||
-            document.querySelector(
-                '.prCl__main.classification, .prMT_T2T__main, .prFITB__main, ' +
-                '.prCLZ__main, .wordsBankTable, .TTpanswerDiv, .prSeq__main, ' +
-                'input[type="radio"], input[type="checkbox"], iframe[id^="mce_"], #tinymce, .tox-tinymce'
-            )
+            hasVisible('.prCl__main.classification, .prMT_T2T__main, .prFITB__main, .prSeq__main') ||
+            hasVisibleWordsBankCloze ||
+            hasVisibleStandardCloze ||
+            hasVisibleInput() ||
+            hasVisible('iframe[id^="mce_"], #tinymce, .tox-tinymce')
         );
     }, { timeout: 30000, polling: 300 });
 }
@@ -149,7 +205,11 @@ async function waitUntilReadyToAdvance(page) {
     }
 
     try {
-        await login(page);
+        const loggedIn = await login(page);
+        if (!loggedIn) {
+            console.log('No se continuara porque el login no fue exitoso. Revisa LOGIN_USERNAME/LOGIN_PASSWORD en .env.');
+            return;
+        }
 
         console.log('=== LISTO ===');
         console.log(HEADLESS ? 'Modo headless activo.' : 'Navega manualmente a Practice Step 2.\n');
@@ -159,16 +219,19 @@ async function waitUntilReadyToAdvance(page) {
 
         while (true) {
             try {
+                if (page.isClosed()) break;
+
                 try {
                     await waitForExercise(page);
-                } catch {
+                } catch (e) {
+                    if (page.isClosed() || isTargetClosedError(e)) break;
                     continue;
                 }
 
                 const exerciseInfo = await page.evaluate(detectExercise);
                 if (!exerciseInfo.type) continue;
 
-                const exerciseName = nameMap[exerciseInfo.type] || exerciseInfo.type;
+                const exerciseName = `${exerciseInfo.isTest ? 'Test ' : ''}${nameMap[exerciseInfo.type] || exerciseInfo.type}`;
                 console.log(`Detectado: ${exerciseName}`);
                 const exerciseKey = `${page.url()}|${exerciseInfo.type}`;
                 if (exerciseKey === lastExerciseKey) {
@@ -178,7 +241,10 @@ async function waitUntilReadyToAdvance(page) {
                     lastExerciseKey = exerciseKey;
                 }
 
-                const ok = await solveWithRetry(page, solveMap[exerciseInfo.type], exerciseName);
+                const solveFn = exerciseInfo.isTest
+                    ? solveTestExercise
+                    : solveMap[exerciseInfo.type];
+                const ok = await solveWithRetry(page, solveFn, exerciseName);
                 if (!ok) {
                     console.log(`${exerciseName} no quedo completo. No se avanzara al siguiente ejercicio.`);
                     if (stuckCount >= MAX_STUCK_RETRIES) {
@@ -188,7 +254,10 @@ async function waitUntilReadyToAdvance(page) {
                     continue;
                 }
 
-                const completion = await getCompletionState(page);
+                const completion = exerciseInfo.isTest
+                    ? await getTestCompletionState(page)
+                    : await getCompletionState(page);
+                if (completion.closed) break;
                 if (completion.hasErrors || !completion.nextEnabled) {
                     console.log(`${exerciseName} aun no esta confirmado como completo. No se avanzara.`);
                     await page.waitForTimeout(1000);
@@ -219,7 +288,7 @@ async function waitUntilReadyToAdvance(page) {
                     console.log('En Home. Navega manualmente.\n');
                 }
             } catch (e) {
-                if (e.message.includes('closed') || e.message.includes('Target')) break;
+                if (isTargetClosedError(e)) break;
                 console.log('Error en loop:', e.message);
                 await page.waitForTimeout(700);
             }
