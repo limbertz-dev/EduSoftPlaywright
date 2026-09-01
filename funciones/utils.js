@@ -1,10 +1,10 @@
 const FAST = {
-    short: 180,
-    medium: 500,
-    afterDrag: 600,
-    feedbackTimeout: 12000,
-    actionTimeout: 7000,
-    saveTimeout: 10000
+    short: 100,
+    medium: 280,
+    afterDrag: 380,
+    feedbackTimeout: 7000,
+    actionTimeout: 5000,
+    saveTimeout: 7000
 };
 
 async function waitAfterSeeAnswer(page) {
@@ -28,6 +28,13 @@ async function waitAfterSeeAnswer(page) {
                 'textarea, .prOpenEnded__qaItemText--input, input.prOpenEnded__qaItemText[type="text"]'
             )).some(el => isVisible(el) && (el.value || el.getAttribute('ng-reflect-model') || '').trim());
 
+            const hasAddInTextAnswer = Array.from(document.querySelectorAll(
+                '.learning__addinTxt_at .ITNewText, .readingExploreWrapper--addText .at .ITNewText'
+            )).some(el => (el.textContent || '').replace(/\s+/g, ' ').trim());
+
+            const selectTextAnswer = (document.querySelector('#answerTxtBox')?.textContent || '').replace(/\s+/g, ' ').trim();
+            const hasSelectTextAnswer = !!selectTextAnswer && !/^select text$/i.test(selectTextAnswer);
+
             return hasVisible(
                 '.correct, .lessonMultipleAnswer.c, ' +
                 '.DDLOptions__selected[id*="aid_"], ' +
@@ -37,9 +44,10 @@ async function waitAfterSeeAnswer(page) {
                 '.prMT_T2T__answersRow .dndZone .dnditem[ans_id], ' +
                 '.prSeq__containerW .dnditem[ans_id], ' +
                 '.prCl__container--normal .dndZone .dnditem[ans_id], ' +
+                '.textToPic__answers .dndZone .dnditem[ans_id], ' +
                 '.TTpanswerDiv.droptarget .wordBankTile[data-id], ' +
                 '.wordsBankTable .wordBankTilePlaced[data-id]'
-            ) || hasOpenEndedAnswer;
+            ) || hasOpenEndedAnswer || hasAddInTextAnswer || hasSelectTextAnswer;
         }, { timeout: 2500, polling: 100 });
     } catch {
         await page.waitForTimeout(FAST.medium);
@@ -83,6 +91,11 @@ async function getCompletionState(page) {
             '.incorrect, .wrong, .feedbackItem--incorrect, ' +
             '.prMT_T2T__answersRow .wrong, .prMT_T2T__answersRow .incorrect, ' +
             '.prCl__container--normal .wrong, .prCl__container--normal .incorrect, ' +
+            '.textToPic__answers .wrong, .textToPic__answers .incorrect, ' +
+            '.addInText .wrong, .addInText .incorrect, ' +
+            '.selectText .wrong, .selectText .incorrect, ' +
+            '.writingEditFrame .wrong, .writingEditFrame .incorrect, ' +
+            '.writingEditPracticeWrapper .wrong, .writingEditPracticeWrapper .incorrect, ' +
             '.prCLZ__regContainer .wrong, .prCLZ__regContainer .incorrect, ' +
             '.prFITB__DDLOptionsW .wrong, .prFITB__DDLOptionsW .incorrect, ' +
             '.has-error, .error-message, .is-wrong, .is-incorrect'
@@ -91,7 +104,9 @@ async function getCompletionState(page) {
             '.feedbackItem--correct, .passed, .completed, .success, .is-correct'
         );
 
-        return { hasErrors, hasSuccess, nextEnabled, checkEnabled };
+        const saveSeen = window.__lastCheckAnswerSaveSeen === true;
+        const stateConfirmed = window.__lastCheckAnswerStateConfirmed === true;
+        return { hasErrors, hasSuccess, nextEnabled, checkEnabled, saveSeen, stateConfirmed };
     });
 }
 
@@ -124,9 +139,9 @@ async function verifyCorrect(page) {
 
     const result = await getCompletionState(page);
 
-    console.log(`  Verify: errors=${result.hasErrors} success=${result.hasSuccess} nextBtn=${result.nextEnabled} checkBtn=${result.checkEnabled}`);
+    console.log(`  Verify: errors=${result.hasErrors} success=${result.hasSuccess} nextBtn=${result.nextEnabled} checkBtn=${result.checkEnabled} saveSeen=${result.saveSeen} stable=${result.stateConfirmed}`);
 
-    if (!result.hasErrors && result.nextEnabled) {
+    if (!result.hasErrors && result.nextEnabled && (!result.checkEnabled || result.saveSeen || result.stateConfirmed)) {
         console.log('Ejercicio completado correctamente');
         return true;
     }
@@ -145,8 +160,11 @@ async function verifyCorrect(page) {
 }
 
 async function dragItemToTarget(page, srcLoc, tgtLoc) {
-    const srcBox = await srcLoc.boundingBox();
-    const tgtBox = await tgtLoc.boundingBox();
+    await srcLoc.scrollIntoViewIfNeeded({ timeout: FAST.actionTimeout }).catch(() => {});
+    await tgtLoc.scrollIntoViewIfNeeded({ timeout: FAST.actionTimeout }).catch(() => {});
+
+    const srcBox = await srcLoc.boundingBox({ timeout: FAST.actionTimeout }).catch(() => null);
+    const tgtBox = await tgtLoc.boundingBox({ timeout: FAST.actionTimeout }).catch(() => null);
     if (!srcBox || !tgtBox) return false;
 
     try {
@@ -185,7 +203,12 @@ async function dragItemToTarget(page, srcLoc, tgtLoc) {
 
 async function waitForCheckAnswer(page) {
     const checkBtn = page.locator('#CheckAnswer');
+    await page.evaluate(() => {
+        window.__lastCheckAnswerSaveSeen = false;
+        window.__lastCheckAnswerStateConfirmed = false;
+    }).catch(() => {});
     await checkBtn.waitFor({ state: 'visible', timeout: FAST.actionTimeout });
+
     const possibleSave = page.waitForResponse((response) => {
         const url = response.url().toLowerCase();
         return response.status() < 500 && (
@@ -206,7 +229,7 @@ async function waitForCheckAnswer(page) {
         console.log('Click forzado en CheckAnswer');
     }
 
-    await page.waitForFunction(() => {
+    const statePromise = page.waitForFunction(() => {
         const isVisible = (el) => {
             if (!el) return false;
             const style = window.getComputedStyle(el);
@@ -219,21 +242,59 @@ async function waitForCheckAnswer(page) {
             !nextBtn.disabled &&
             !nextBtn.classList.contains('disabled') &&
             nextBtn.getAttribute('aria-disabled') !== 'true';
-        const hasErrors = !!document.querySelector(
-            '.incorrect, .wrong, .feedbackItem--incorrect, .has-error, .error-message, .is-wrong, .is-incorrect'
-        );
-        const hasSuccess = !!document.querySelector(
-            '.feedbackItem--correct, .passed, .completed, .success, .is-correct'
-        );
-        return nextEnabled || hasErrors || hasSuccess;
-    }, { timeout: FAST.feedbackTimeout, polling: 150 }).catch(() => null);
+        const checkBtn = document.querySelector('#CheckAnswer');
+        const checkEnabled = !!checkBtn &&
+            isVisible(checkBtn) &&
+            !checkBtn.disabled &&
+            !checkBtn.classList.contains('disabled') &&
+            checkBtn.getAttribute('aria-disabled') !== 'true';
+        const hasErrors = !!document.querySelector('.incorrect, .wrong, .feedbackItem--incorrect, .has-error, .error-message, .is-wrong, .is-incorrect');
+        const hasSuccess = !!document.querySelector('.feedbackItem--correct, .passed, .completed, .success, .is-correct');
+        return hasErrors || hasSuccess || !checkEnabled || nextEnabled;
+    }, { timeout: FAST.feedbackTimeout, polling: 100 }).catch(() => null);
 
-    await Promise.race([
-        possibleSave,
-        page.waitForTimeout(2500).then(() => null)
+    const first = await Promise.race([
+        possibleSave.then(response => ({ kind: response ? 'save' : 'save-timeout' })),
+        statePromise.then(() => ({ kind: 'state' })),
+        page.waitForTimeout(1200).then(() => ({ kind: 'soft-timeout' }))
     ]);
 
-    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+    if (first.kind === 'save') {
+        await page.evaluate(() => { window.__lastCheckAnswerSaveSeen = true; }).catch(() => {});
+    }
+
+    let state = await getCompletionState(page).catch(() => null);
+    if (state && !state.hasErrors && state.nextEnabled) {
+        if (!state.checkEnabled || state.saveSeen || state.hasSuccess) {
+            await page.evaluate(() => { window.__lastCheckAnswerStateConfirmed = true; }).catch(() => {});
+            return;
+        }
+
+        await page.waitForTimeout(250);
+        const stable = await getCompletionState(page).catch(() => null);
+        if (stable && !stable.hasErrors && stable.nextEnabled) {
+            await page.evaluate(() => { window.__lastCheckAnswerStateConfirmed = true; }).catch(() => {});
+            return;
+        }
+    }
+
+    const saveResponse = first.kind === 'save'
+        ? true
+        : await Promise.race([
+            possibleSave,
+            page.waitForTimeout(900).then(() => null)
+        ]);
+
+    if (saveResponse && saveResponse !== true) {
+        await page.evaluate(() => { window.__lastCheckAnswerSaveSeen = true; }).catch(() => {});
+    }
+
+    state = await getCompletionState(page).catch(() => null);
+    if (state && !state.hasErrors && state.nextEnabled) {
+        await page.evaluate(() => { window.__lastCheckAnswerStateConfirmed = true; }).catch(() => {});
+    } else {
+        console.log('  No se detecto guardado; estado no estable para avanzar');
+    }
 }
 
 module.exports = {

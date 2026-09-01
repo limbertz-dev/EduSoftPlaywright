@@ -1,6 +1,7 @@
 const { waitForTestCheck, verifyTestResult, FAST } = require('./utils.js');
 const { extractMCQForAI } = require('./extract.js');
 const { askAIForMCQ } = require('./ai.js');
+const { askForManualTestContext, askForManualMCQAnswer } = require('./common.js');
 
 async function selectMcqOption(page, id) {
     return await page.evaluate((id) => {
@@ -127,6 +128,20 @@ function mapAIAnswersToIds(exercise, answers) {
     return [...new Set(ids)];
 }
 
+async function askManualAnswerForExercise(page, exercise, reason) {
+    const manualAnswers = await askForManualMCQAnswer(page, {
+        type: 'multiple_choice',
+        questionText: exercise.questionText,
+        options: exercise.options.map(option => ({ label: option.label, text: option.text })),
+        multiSelect: exercise.multiSelect
+    }, reason);
+    const manualIds = mapAIAnswersToIds(exercise, manualAnswers);
+    if (manualIds.length) {
+        console.log(`Respuesta manual seleccionada: [${manualAnswers.join(', ')}]`);
+        return { ids: manualIds, source: 'manual' };
+    }
+    return { ids: [], source: 'manual-empty' };
+}
 async function getAISelectedIds(page) {
     const exercise = await extractMCQForAI(page);
     if (!exercise.options.length) {
@@ -139,9 +154,30 @@ async function getAISelectedIds(page) {
         console.log(`  ${option.label}. ${option.text} [${option.id}]`);
     });
 
+    const manualContext = await askForManualTestContext(page, {
+        type: 'multiple_choice',
+        questionText: exercise.questionText,
+        options: exercise.options.map(option => ({ label: option.label, text: option.text }))
+    });
+    if (manualContext) {
+        exercise.manualContext = manualContext;
+        console.log(`Contexto manual agregado para IA (${manualContext.length} caracteres)`);
+    }
+
+    if (global.__testAIAuthFailed) {
+        console.log('IA deshabilitada temporalmente por error de autenticacion previo; usando selector manual');
+        return await askManualAnswerForExercise(page, exercise, 'api-auth');
+    }
+
     const ai = await askAIForMCQ(exercise);
     if (!ai.ok) {
         console.log(`IA no disponible (${ai.reason})${ai.detail ? `: ${ai.detail}` : ''}`);
+        if (ai.reason === 'api-401' || ai.reason === 'api-403') {
+            global.__testAIAuthFailed = true;
+            console.log('La key de IA no es valida; no se reintentara IA en esta ejecucion. Abriendo selector manual.');
+        }
+        const manualResult = await askManualAnswerForExercise(page, exercise, ai.reason);
+        if (manualResult.ids.length) return manualResult;
         return { ids: [], source: 'ai-failed' };
     }
 
@@ -172,7 +208,9 @@ async function solveTestMCQ(page) {
             console.log('Sin clave visible en DOM; intentando resolver con IA');
             const aiCandidates = await getAISelectedIds(page);
 
-            if (aiCandidates.source === 'ai' && process.env.AI_AUTO_SELECT === 'true') {
+            if (aiCandidates.source === 'manual') {
+                candidates = aiCandidates;
+            } else if (aiCandidates.source === 'ai' && process.env.AI_AUTO_SELECT === 'true') {
                 candidates = aiCandidates;
             } else if (aiCandidates.source === 'ai') {
                 console.log('AI_AUTO_SELECT no esta activo; no se enviara la respuesta automaticamente');
@@ -180,7 +218,7 @@ async function solveTestMCQ(page) {
             } else if (process.env.TEST_ALLOW_GUESS === 'true') {
                 console.log('IA no resolvio; TEST_ALLOW_GUESS=true, se usara fallback visible');
             } else {
-                console.log('No se enviara fallback. Activa AI_API_KEY + AI_AUTO_SELECT=true, o TEST_ALLOW_GUESS=true para pruebas exploratorias.');
+                console.log('No se enviara fallback. La IA no resolvio y no se eligio respuesta manual; activa AI_API_KEY + AI_AUTO_SELECT=true, o TEST_ALLOW_GUESS=true para pruebas exploratorias.');
                 return false;
             }
         }
